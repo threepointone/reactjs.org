@@ -15,3 +15,4 @@ Writing tests for React components ensures that its behaviour matches your expec
 
 * **[Jest](https://facebook.github.io/jest/):** Delightful JavaScript testing used by Facebook to test all JavaScript code including React applications.
 * **[react-testing-library](https://github.com/kentcdodds/react-testing-library):** 🐐 Simple and complete React DOM testing utilities that encourage good testing practices.
+* **[Enzyme](https://github.com/airbnb/enzyme/):** a JavaScript Testing utility for React that makes it easier to assert, manipulate, and traverse your React Components' output.
