@@ -7,7 +7,8 @@ permalink: docs/testing-recipes.html
 This document lists some common testing patterns for React components.
 
 - This assumes tests are running in jest. For details on setting up a testing environment, read [the Environments doc](/docs/testing-environments.html).
-- This guide uses React's [`act()`](/docs/act.html) testing helper.
+- This assumes you're using [React Testing Library](https://testing-library.com/react) (`@testing-library/react`) and [jest-dom](https://testing-library.com/jest-dom) (`@testing-library/jest-dom`) which is recommended
+- This guide uses React's [`act()`](/docs/act.html) testing helper when using jest fake timers.
 
 ### Rendering {#rendering}
 
@@ -17,9 +18,9 @@ Testing whether a component renders correctly for given props is a useful signal
 // hello.js
 export default function Hello(props) {
   return props.name === undefined ? (
-    <h1>Hello, {props.name}!</h1>
-  ) : (
     <span>Hey, stranger</span>
+    ) : (
+    <h1>Hello, {props.name}!</h1>
   );
 }
 ```
@@ -28,41 +29,23 @@ We can write a test for this component:
 
 ```jsx
 // hello.test.js
+import "@testing-library/react/cleanup-after-each";
+import "@testing-library/jest-dom/extend-expect";
+import { render } from "@testing-library/react";
 import Hello from "./hello";
-import { render } from "react-dom";
-import { act } from "react-dom/test-utils";
 
-let container = null
-beforeEach(() => {
-  // setup a DOM element as a render target
-  container = document.createElement('div')
-  // attach the container to document so events works correctly
-  document.body.appendChild(container)
-})
+test("renders without a name", () => {
+  const { container } = render(<Hello />);
+  expect(container).toHaveTextContent("Hey, stranger");
+});
 
-afterEach(() => {
-  // cleanup on exiting
-  container.remove();
-  container = null  
-})
-
-it("renders with or without a name", () => {
-  act(() => {
-    render(<Hello />, container);
-  });
-  expect(container.textContent).toBe("Hey, stranger");
-
-  act(() => {
-    render(<Hello name="Sophie" />, container);
-  });
-  expect(container.textContent).toBe("Hello Sophie!");
-
-  act(() => {
-    render(<Hello name="Flarnie" />, container);
-  });
-  expect(container.textContent).toBe("Hello Flarnie!");
+test("renders with a name", () => {
+  const { container } = render(<Hello name="Sophie" />);
+  expect(container).toHaveTextContent("Hello, Sophie!");
 });
 ```
+
+> Note: React Testing Library renders your components to a div which it appends to `document.body`. The import of `@testing-library/react/cleanup-after-each` automatically removes those after each test. The `@testing-library/jest-dom/extend-expect` adds helpful DOM-specific assertions like `toHaveTextContent`. It's best to configure Jest to include these files automatically via the `setupFilesAfterEnv` option (or you can import them in your `src/setupTests.js` file in create-react-app).
 
 ### Data fetching {#data-fetching}
 
@@ -80,13 +63,13 @@ export default function User(props) {
     fetchUserData(props.id);
   }, [props.id]);
   return user === null ? (
-    "loading..."
+    <div>loading...</div>
   ) : (
     <details>
-      <summary>{user.name}</summary>
-      <strong>{user.age}</strong> years old
+      <summary aria-label="name">{user.name}</summary>
+      <strong aria-label="age">{user.age}</strong> years old
       <br />
-      lives in {user.address}
+      lives in <span aria-label="address">{user.address}</span>
     </details>
   );
 }
@@ -95,46 +78,42 @@ export default function User(props) {
 We can write tests for it:
 
 ```jsx
+// user.test.js
+import { render } from "@testing-library/react";
 import User from "./user";
-import { render } from "react-dom";
-import { act } from "react-dom/test-utils";
 
-let container = null
 beforeEach(() => {
-  // setup a DOM element as a render target
-  container = document.createElement('div')
-  document.body.appendChild(container)
-})
+  // mock window.fetch so the unit tests don't actually make HTTP requests
+  jest.spyOn(window, "fetch").mockImplementation(() => {});
+});
 
 afterEach(() => {
-  // cleanup on exiting
-  container.remove();
-  container = null  
-})
+  // remove the mock to ensure tests are completely isolated
+  window.fetch.mockRestore();
+});
 
-it("renders user data", async () => {
+test("renders user data", async () => {
   const fakeUser = {
     name: "Joni Baez",
     age: "32",
-    address: "123, Charming Avenue"
+    address: "123, Charming Avenue",
   };
-  jest.spyOn(global, "fetch").mockImplementation(() =>
+  window.fetch.mockImplementationOnce(() =>
     Promise.resolve({
-      json: () => Promise.resolve(fakeUser)
-    })
+      json: () => Promise.resolve(fakeUser),
+    }),
   );
 
-  // Use the asynchronous version of act to flush resolved promises
-  await act(async () => {
-    render(<User id="123" />, div);
-  });
+  const { getByLabelText, getByText } = render(<User id="123" />);
 
-  expect(container.querySelector("summary").textContent).toBe(fakeUser.name);
-  expect(container.querySelector("strong").textContent).toBe(fakeUser.age);
-  expect(container.textContent).toContain(fakeUser.address);
+  expect(window.fetch).toHaveBeenCalledTimes(1);
+  expect(window.fetch).toHaveBeenCalledWith("/123");
 
-  // remove the mock to ensure tests are completely isolated
-  global.fetch.mockRestore();
+  await waitForElementToBeRemoved(() => getByText(/loading/i));
+
+  expect(getByLabelText(/name/i)).toHaveTextContent(fakeUser.name);
+  expect(getByLabelText(/age/i)).toHaveTextContent(fakeUser.age);
+  expect(getByLabelText(/address/i)).toHaveTextContent(fakeUser.address);
 });
 ```
 
@@ -157,7 +136,7 @@ export default function Map(props) {
 // contact.js
 import React from "react";
 import Map from "./map";
-function Contact(props) {
+export default function Contact(props) {
   return (
     <div>
       <address>
@@ -175,32 +154,17 @@ In a testing environment, it's not very useful to load the Map component, beside
 ```jsx
 // contact.test.js
 import React from "react";
-import { render } from "react-dom";
+import { render } from "@testing-library/react";
 import Contact from "./contact";
 import MockedMap from "./map";
 
 jest.mock("./map", () => jest.fn(() => "DummyMap"));
 
-let container = null
-beforeEach(() => {
-  // setup a DOM element as a render target
-  container = document.createElement('div')
-  document.body.appendChild(container)
-})
-
-afterEach(() => {
-  // cleanup on exiting
-  container.remove();
-  container = null  
-})
-
-it("should render contact information", () => {
+test("renders contact information", () => {
   const center = { lat: 0, lang: 0 };
-  act(() => {
-    render(<Contact name="" email="" site="" center={center} />, container);
-  });
+  render(<Contact name="" email="" site="" center={center} />);
   // ensure the mocked map component function was called correctly
-  expect(MockedMap).toHaveBeenCalledWith({ id: "example-map", center }, {});
+  expect(MockedMap).toHaveBeenCalledWith({ center }, {});
 });
 ```
 
@@ -211,16 +175,14 @@ Dispatch real events on components and elements, and observe the side effects of
 ```jsx
 // toggle.js
 import React, { useState } from "react";
-function Toggle(props) {
-  // initial, onChange
-  const [state, setState] = useState(Boolean(initial));
+export default function Toggle({initial = false, onChange}) {
+  const [state, setState] = useState(initial);
   return (
     <button
       onClick={() => {
         setState(previousState => !previousState);
-        onChange(!previousState);
+        onChange(!state);
       }}
-      data-testid="toggle"
     >
       {state === true ? "Turn off" : "Turn on"}
     </button>
@@ -233,43 +195,23 @@ We could write tests for it:
 ```jsx
 // toggle.test.js
 import React from "react";
-import { render } from "react-dom";
+import { render, fireEvent } from "@testing-library/react";
 import Toggle from "./toggle";
 
-let container = null
-beforeEach(() => {
-  // setup a DOM element as a render target
-  container = document.createElement('div')
-  document.body.appendChild(container)
-})
-
-afterEach(() => {
-  // cleanup on exiting
-  container.remove();
-  container = null  
-})
-
-it("changes value when clicked", () => {
-  // a counter to track clicks
-  let clicks = 0;
-  act(() => {
-    render(<Toggle initial={true} onChange={() => clicks++} />, container);
-  });
-  // get a hold of the button element, and trigger some clicks on it
-  const button = document.querySelector("[data-testid=toggle]");
-  expect(button.innerText).toBe("Turn on!");
-  act(() => {
-    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-  });
-  expect(clicks).toBe(1);
-  expect(button.innerText).toBe("Turn off!");
-  act(() => {
-    for (let i = 0; i < 5; i++) {
-      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    }
-  });
-  expect(clicks).toBe(6);
-  expect(button.innerText).toBe("Turn on!");
+test("changes value when clicked", () => {
+  const handleChange = jest.fn();
+  const { getByText } = render(
+    <Toggle initial={true} onChange={handleChange} />,
+  );
+  const button = getByText(/turn off/i);
+  fireEvent.click(button);
+  expect(handleChange).toHaveBeenCalledTimes(1);
+  expect(button).toHaveTextContent(/turn on/i);
+  for (let i = 0; i < 5; i++) {
+    fireEvent.click(button);
+  }
+  expect(handleChange).toHaveBeenCalledTimes(6);
+  expect(button).toHaveTextContent(/turn off/i);
 });
 ```
 
@@ -278,126 +220,106 @@ it("changes value when clicked", () => {
 UIs could use timer based functions like `setTimeout` to run time sensitive code. In this example, a multiple choice panel waits for a selection and advances, timing out if a selection isn't made in 5 seconds.
 
 ```jsx
-function Card(props) {
-  useEffect(
-    props => {
-      const timeoutID = setTimeout(() => {
-        props.onSelect(null);
-      }, 5000);
-      return () => {
-        clearTimeout(timeoutID);
-      };
-    },
-    [props.onSelect]
-  );
-  return [1, 2, 3, 4].map(choice => {
+// card.js
+import React, { useEffect } from "react";
+
+export default function Card({ onSelect }) {
+  useEffect(() => {
+    const timeoutID = setTimeout(() => {
+      onSelect(null);
+    }, 5000);
+    return () => {
+      clearTimeout(timeoutID);
+    };
+  }, [onSelect]);
+  return [1, 2, 3, 4].map(choice => (
     <button
       key={choice}
-      data-test-id={choice}
-      onClick={() => props.onSelect(choice)}
+      data-testid={`card-button-${choice}`}
+      onClick={() => onSelect(choice)}
     >
       {choice}
-    </button>;
-  });
+    </button>
+  ));
 }
 ```
 
 We can write tests for this component by leveraging jest's timer mocks, and testing the different states it can be in.
 
+> Note: When using Jest timers, you can't rely on React Testing Library calling [`act()`](/docs/act.html) for you, so you have to call it manually. As a convenience, `@testing-library/react` exports `act`.
+
 ```jsx
 // card.test.js
+import React from "react";
+import { render, fireEvent, act } from "@testing-library/react";
+import Card from "./card";
+
 jest.useFakeTimers();
 
-let container = null
-beforeEach(() => {
-  // setup a DOM element as a render target
-  container = document.createElement('div')
-  document.body.appendChild(container)
-})
-
-afterEach(() => {
-  // cleanup on exiting
-  container.remove();
-  container = null  
-})
-
-function render(ui){
-  act(() => {
-    ReactDOM.render(ui, container);
-  });
-}
-
-it("should select null after timing out", () => {
-  const yields = [];
-  render(<Card onSelect={selection => yields.push(selection)} />);
+test("selects null after timing out", () => {
+  const handleSelect = jest.fn();
+  render(<Card onSelect={handleSelect} />);
   act(() => {
     jest.advanceTimersByTime(100);
   });
-  expect(yields).toBe([]);
+  expect(handleSelect).not.toHaveBeenCalled();
   act(() => {
-    jest.advanceTimersByTime(1000);
+    jest.advanceTimersByTime(10000);
   });
-  expect(yields).toBe([null]);
+  expect(handleSelect).toHaveBeenCalledTimes(1);
+  expect(handleSelect).toHaveBeenCalledWith(null);
 });
 
-it("should cleanup on being removed", () => {
-  const yields = [];
-  render(
-    <Card onSelect={selection => yields.push(selection)} />
-  );
+test("cleans up on being removed", () => {
+  const handleSelect = jest.fn();
+  const { unmount } = render(<Card onSelect={handleSelect} />);
+  unmount();
   act(() => {
-    jest.advanceTimersByTime(100);
+    jest.advanceTimersByTime(10000);
   });
-  expect(yields).toBe([]);
-  act(() => {
-    render(null);
-  });
-  act(() => {
-    jest.advanceTimersByTime(1000);
-  });
-  expect(yields).toBe([]);
+  expect(handleSelect).not.toHaveBeenCalled();
 });
 
-it("should accept selections", () => {
-  const yields = [];
-  render(
-    <Card onSelect={selection => yields.push(selection)} />
-  );
+test("accepts selections", () => {
+  const handleSelect = jest.fn();
+  const { getByTestId } = render(<Card onSelect={handleSelect} />);
 
-  act(() => {
-    container
-      .querySelector("[data-test-id=2]")
-      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
-  });
+  fireEvent.click(getByTestId("card-button-2"));
 
-  expect(yields).toBe([2]);
+  expect(handleSelect).toHaveBeenCalledTimes(1);
+  expect(handleSelect).toHaveBeenCalledWith(2);
 });
 ```
 
 ### Snapshot testing {#snapshot-testing}
 
-Frameworks like Jest also let you save 'snapshots' of data. Combined with react-test-renderer, we can save component structures, and verify they don't break in the future. It's typically better to make more specific assertions than to use snapshots (or at least ensure that the snapshot is small) because these kinds of tests include implementation details meaning they break easily and teams can get desensitized to snapshot breakages.
+Frameworks like Jest also let you save 'snapshots' of data, like DOM nodes. With snapshot testing, we can save DOM structures, and verify they don't change in the future. It's typically better to make more specific assertions than to use snapshots (or at least ensure that the snapshot is small) because these kinds of tests include implementation details meaning they break easily and teams can get desensitized to snapshot breakages.
 
 ```jsx
 // hello.test.js, again
+import React from "react";
+import { render } from "@testing-library/react";
 import Hello from "./hello";
-import { create, act } from "react-test-renderer";
 
-// a helper to convert a React component tree to json
-function toJSON(element) {
-  let root;
-  act(() => {
-    root = create(element);
-  });
-  return root.toJSON();
-}
+test("preserves its structure", () => {
+  expect(render(<Hello />).container).toMatchInlineSnapshot(`
+    <div>
+      <span>
+        Hey, stranger
+      </span>
+    </div>
+  `);
 
-it("should preserve it's structure", () => {
-  expect(toJSON(<Hello />)).toMatchSnapshot();
-  expect(toJSON(<Hello name="Sophie" />)).toMatchSnapshot();
-  expect(toJSON(<Hello name="Flarnie" />)).toMatchSnapshot();
+  expect(render(<Hello name="Sophie" />).container).toMatchInlineSnapshot(`
+    <div>
+      <h1>
+        Hello, 
+        Sophie
+        !
+      </h1>
+    </div>
+  `);
 });
 ```
 
 - [Jest snapshots](https://jestjs.io/docs/en/snapshot-testing)
-- [`react-test-renderer`](https://reactjs.org/docs/test-renderer.html)
